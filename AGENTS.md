@@ -1,17 +1,17 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+## Cursor Cloud 专用说明
 
-This repository (`AI_DEMO`) is currently an empty scaffold with only a `README.md`. There is no application code, no dependencies, no build system, and no services to run.
+本仓库（`AI_DEMO`）目前是一个空的脚手架项目，仅包含一个 `README.md` 文件。没有应用代码、依赖项、构建系统或需要运行的服务。
 
-### Current state
-- **No language/framework** has been chosen yet.
-- **No package manager lockfile** exists (no `package.json`, `requirements.txt`, `Cargo.toml`, `go.mod`, etc.).
-- **No tests, lint, or build commands** are available.
-- **No services** need to be started.
+### 当前状态
+- **尚未选择语言/框架**。
+- **没有包管理器锁文件**（无 `package.json`、`requirements.txt`、`Cargo.toml`、`go.mod` 等）。
+- **没有可用的测试、代码检查或构建命令**。
+- **没有需要启动的服务**。
 
-### For future agents
-Once application code is added to this repository, update this file with:
-- How to install dependencies
-- How to run lint, tests, and the application
-- Any non-obvious startup caveats or environment requirements
+### 给未来 Agent 的说明
+当应用代码添加到本仓库后，请更新此文件，补充以下内容：
+- 如何安装依赖
+- 如何运行代码检查（lint）、测试和应用
+- 任何不明显的启动注意事项或环境要求
