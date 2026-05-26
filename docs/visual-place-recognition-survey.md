@@ -745,7 +745,7 @@ AP-GeM 使用 GeM 池化，并用更贴近检索评价指标的 average precisio
 
 相对 NetVLAD，MixVPR 往往结构更直接、计算更高效，在一些标准 VPR benchmark 上表现很强。
 
-### 10.6 EigenPlaces、SelaVPR、SALAD 等趋势
+### 10.6 EigenPlaces、SelaVPR、SuperPlace、SALAD 等趋势
 
 近年的 VPR 方法呈现几个趋势：
 
@@ -753,6 +753,8 @@ AP-GeM 使用 GeM 池化，并用更贴近检索评价指标的 average precisio
 - 使用分类/proxy 学习替代复杂元组采样。
 - 强化局部 token 或 patch 的判别力。
 - 在无监督或自监督基础模型特征上做轻量聚合。
+- 用参数高效适配方法把冻结基础模型迁移到 VPR，而不是全量微调。
+- 重新审视 GeM、NetVLAD、VLAD 等经典聚合，在强 foundation model 特征上恢复其竞争力。
 - 更关注跨数据集泛化，而不只是单 benchmark 性能。
 
 ---
@@ -948,7 +950,148 @@ DINOv2 对 VPR 有吸引力的原因：
 
 这类方法的核心问题是：基础模型已经给出强局部表示，VPR 模型主要需要学会“哪些 token 对地点稳定、如何聚合、如何抑制动态和无关区域”。
 
-### 12.6 DINOv2 与 SuperPoint/SuperGlue 的互补
+### 12.6 SelaVPR：预训练模型到 VPR 的无缝适配
+
+**SelaVPR（Towards Seamless Adaptation of Pre-trained Models for Visual Place Recognition, ICLR 2024）** 是基础模型时代 VPR 的代表工作之一。它关注的问题不是重新从头训练 VPR backbone，而是如何把 DINOv2 等预训练视觉模型高效适配到地点识别任务。
+
+核心动机：
+
+- 预训练模型的通用视觉特征很强，但其注意力可能落在行人、车辆等动态前景上。
+- VPR 更需要稳定、可区分的静态地标，例如建筑立面、道路结构、树木轮廓等。
+- 全量微调基础模型代价高，并可能损害预训练模型的泛化能力。
+- 两阶段 VPR 通常需要全局检索和局部重排序，单一 CLS token 或普通全局池化不足以覆盖两者。
+
+SelaVPR 的方法可以概括为：
+
+```text
+冻结 DINOv2/ViT backbone
+        -> 添加轻量 global adapters
+        -> 输出适合地点检索的全局 GeM 描述子
+        -> 添加 local adaptation 上采样模块
+        -> 输出密集局部特征
+        -> Top-K 全局召回 + 互最近邻局部重排序
+```
+
+#### 12.6.1 Hybrid global-local adaptation
+
+SelaVPR 采用混合适配：
+
+1. **Global adaptation**
+   - 在每个 transformer block 中加入轻量 adapter。
+   - 典型设计包括 MHA 后的串联 adapter，以及与 MLP 并联的 adapter。
+   - 只训练 adapter，冻结预训练 backbone。
+   - 输出特征图后用 GeM 得到全局描述子。
+
+2. **Local adaptation**
+   - 在 ViT 输出特征图后接上采样卷积模块。
+   - 将较粗的 patch token 特征变成更密集的局部特征网格。
+   - 局部特征可用于候选图像之间的重排序。
+
+这种设计的关键是：同一个基础模型同时服务于全局召回和局部重排序，但需要训练的参数很少。
+
+#### 12.6.2 Mutual nearest neighbor local feature loss
+
+SelaVPR 还提出互最近邻局部特征损失，用来让局部特征更适合直接匹配。对查询图像和正样本图像，方法寻找局部特征之间的 mutual nearest neighbor matches，并鼓励这些匹配的相似度更高；对负样本则压低匹配相似度。
+
+直观理解：
+
+```text
+正确地点之间的局部 token 应该能互相找到稳定对应
+错误地点之间即使外观相似，也不应形成高置信局部对应
+```
+
+因此，SelaVPR 的重排序可以直接使用局部匹配数量或匹配分数，而不强依赖 RANSAC 等耗时空间验证。论文报告其两阶段检索运行时间显著低于常规 “局部匹配 + RANSAC” 管线。
+
+#### 12.6.3 在发展脉络中的位置
+
+SelaVPR 的意义在于把 VPR 从“训练一个专用检索网络”推进到“参数高效适配基础模型”：
+
+- 相比 AnyLoc/DINOv2+VLAD：SelaVPR 不只是零样本聚合，而是用少量可训练模块让特征更关注地点判别区域。
+- 相比 NetVLAD/CosPlace/MixVPR：它更依赖基础模型的通用表征，用 adapter 缩小预训练任务与 VPR 任务的差距。
+- 相比 SuperPoint/SuperGlue：它的局部特征更偏 ViT dense token matching，用于候选重排序，而不是传统关键点几何验证。
+
+局限与注意点：
+
+- 仍需要 VPR 数据进行适配训练。
+- 局部重排序虽然比 RANSAC 快，但仍比单阶段全局检索更重。
+- 对基础模型、输入分辨率和 token 密度较敏感。
+
+### 12.7 SuperPlace：基础模型时代经典特征聚合的复兴
+
+**SuperPlace（The Renaissance of Classical Feature Aggregation for Visual Place Recognition in the Era of Foundation Models, 2025）** 的核心观点是：在 DINOv2 等视觉基础模型出现后，很多十年前的经典聚合方法并没有过时；相反，当底层特征足够强、训练数据足够多样时，GeM 和 NetVLAD 这类简洁聚合仍能达到很强的 VPR 性能。
+
+它针对两个现象提出反思：
+
+- 近年不少方法把重点放在复杂的新聚合结构上，但未充分利用大规模、多来源 VPR 数据。
+- 基础模型已经提供强 token/feature map，经典聚合的瓶颈可能不再是表达能力，而是训练方式、维度压缩和跨数据集标签对齐。
+
+SuperPlace 的主要贡献可以概括为三点。
+
+#### 12.7.1 Supervised label alignment：多数据集统一训练
+
+VPR 数据集之间的标签定义并不一致：
+
+- 有的用 GPS 半径定义正负样本。
+- 有的有方向、视角或序列信息。
+- 不同城市、平台和采集条件差异很大。
+
+SuperPlace 提出 supervised label alignment，将网格划分与局部特征匹配结合，把来自不同 VPR 数据集的监督信号对齐到统一训练框架中。其目标不是只在单个 benchmark 上过拟合，而是借鉴 foundation model 的思想，利用更广泛、多样的数据训练更通用的地点表示。
+
+#### 12.7.2 G2M：双 GeM 的紧凑聚合
+
+SuperPlace-G2M 是面向低延迟、大规模检索的紧凑聚合方案。G2M 可以理解为两个 GeM 分支的协同：
+
+- 一个 GeM 负责从特征图中聚合主要地点响应。
+- 另一个 GeM 学习通道方向的主成分或校准信息，用来调整前者的输出。
+
+直观上，普通 GeM 只做：
+
+```text
+feature map -> generalized mean pooling -> descriptor
+```
+
+G2M 则引入额外的通道校准：
+
+```text
+feature map -> GeM descriptor
+feature map -> auxiliary GeM/channel calibration
+        -> calibrated compact descriptor
+```
+
+这样在较低维度下保留更多地点判别信息，适合需要快速响应、低存储和低带宽的场景。
+
+#### 12.7.3 NetVLAD-Linear 与二次微调 FT2
+
+SuperPlace 还重新强化了 NetVLAD。传统 NetVLAD 输出维度较高，直接用于大规模检索会带来存储和计算压力；常见做法是离线 PCA 降维。SuperPlace 提出 **NetVLAD-Linear（NVL）**：在 NetVLAD 后接一个线性层，把高维 VLAD 表示压缩到低维。
+
+关键在于 **secondary fine-tuning（FT2）**：
+
+1. 第一阶段训练 backbone 和 NetVLAD，使模型先在高维空间学到充分表达。
+2. 第二阶段加入或重点训练线性降维层，让压缩后的低维向量尽量保留高维判别能力。
+
+这比简单 PCA 更端到端，也比一开始就强行低维训练更稳。论文中 SuperPlace-NVL-FT2 面向高精度场景，而 SuperPlace-G2M 面向低维高效场景。
+
+#### 12.7.4 在发展脉络中的位置
+
+SuperPlace 的历史意义在于把两条线重新接起来：
+
+```text
+经典聚合：GeM / NetVLAD / VLAD
+        + 基础模型：DINOv2 等强预训练 backbone
+        + 多数据集统一监督
+        + 低维压缩或二次微调
+        -> 高效且高精度的现代 VPR 描述子
+```
+
+因此它不是简单回到传统方法，而是在基础模型特征之上重新验证经典聚合的价值。它也说明：VPR 的性能提升不一定来自越来越复杂的聚合模块，数据组织、标签对齐、压缩策略和训练阶段设计同样关键。
+
+局限与注意点：
+
+- 对多数据集训练和标签对齐流程有较强依赖。
+- G2M 与 NVL-FT2 面向不同部署目标，选型时需区分低延迟和高精度需求。
+- 其结论依赖强基础模型特征；在弱 backbone 上未必能复现同样优势。
+
+### 12.8 DINOv2 与 SuperPoint/SuperGlue 的互补
 
 DINOv2 token 更偏语义和区域级表示，SuperPoint/SuperGlue 更偏几何精确匹配。实际系统可以组合：
 
@@ -977,7 +1120,7 @@ DINOv2/NetVLAD/CosPlace 全局召回
   -> NetVLAD 可学习聚合
   -> GeM/DELG/CosPlace/MixVPR 等深度检索模型
   -> SuperPoint/SuperGlue 等学习式局部匹配
-  -> DINOv2/基础模型 + 轻量聚合/重排序
+  -> DINOv2/基础模型 + 轻量聚合/adapter 适配/经典聚合复兴
 ```
 
 每一步都在解决前一步的不足：
@@ -988,6 +1131,8 @@ DINOv2/NetVLAD/CosPlace 全局召回
 - NetVLAD 解决传统 VLAD 不能端到端学习的问题。
 - 深度局部匹配解决全局描述子缺少几何一致性的问题。
 - DINOv2 解决专用训练数据依赖和跨域泛化问题的一部分。
+- SelaVPR 说明基础模型可以通过少量 adapter 被高效迁移到 VPR 的全局召回和局部重排序。
+- SuperPlace 说明在强基础模型和多数据集训练下，GeM、NetVLAD 等经典聚合仍然可以成为高性能现代 VPR 的核心。
 
 ### 13.2 全局描述子与局部匹配的分工
 
@@ -1032,6 +1177,8 @@ DINOv2/NetVLAD/CosPlace 全局召回
 | SuperGlue | 深度匹配 | 注意力图匹配 | 监督训练 | 匹配精度高 | 计算较重 | 重排序/几何验证 |
 | LoFTR | 稠密匹配 | Transformer 匹配 | 监督训练 | 弱纹理更稳 | 成本较高 | 宽基线匹配 |
 | DINOv2+VLAD | 基础模型聚合 | ViT patch token | 可零样本 | 泛化强 | 存储/计算较重 | 现代 VPR 召回 |
+| SelaVPR | 基础模型适配 | DINOv2 + adapters + dense local features | 冻结 backbone、训练轻量 adapter | 全局召回和局部重排序统一、训练参数少 | 仍需 VPR 适配数据和重排序成本 | 两阶段 VPR |
+| SuperPlace | 基础模型 + 经典聚合 | G2M / NetVLAD-Linear + FT2 | 多数据集监督训练 | 低维高效或高精度两种路线、复兴经典聚合 | 依赖标签对齐和强 backbone | 现代 VPR 全局检索 |
 
 ---
 
@@ -1239,6 +1386,8 @@ NetVLAD / CosPlace / MixVPR / DINOv2+VLAD
 - **SuperPoint**：用深度网络检测关键点并提取局部描述子。
 - **SuperGlue**：用注意力图神经网络和最优传输做高质量特征匹配。
 - **DINOv2**：提供强通用 ViT patch 特征，可与 VLAD/GeM/学习式聚合组合用于零样本或少样本 VPR。
+- **SelaVPR**：冻结 DINOv2 等预训练模型，用轻量 adapter 同时适配全局地点描述子和密集局部重排序特征。
+- **SuperPlace**：在基础模型特征上重新强化 GeM 与 NetVLAD，通过 G2M、NetVLAD-Linear 和 FT2 获得高效或高精度 VPR 表示。
 
 ---
 
@@ -1247,10 +1396,10 @@ NetVLAD / CosPlace / MixVPR / DINOv2+VLAD
 图像检索与视觉位置识别的发展不是简单地从传统方法“替换”为深度方法，而是许多思想被不断继承：
 
 - BoW 的倒排索引思想仍影响大规模检索系统。
-- VLAD 的残差聚合在 NetVLAD 和 DINOv2+VLAD 中继续发挥作用。
+- VLAD 的残差聚合在 NetVLAD、DINOv2+VLAD 和 SuperPlace 的 NetVLAD-Linear 中继续发挥作用。
 - 局部特征匹配和几何验证仍是消除误检索的关键。
 - 深度学习提升了特征鲁棒性和跨条件表达能力。
-- 基础模型让“无专用训练的强特征”成为可能，但工程系统仍需要索引、压缩、重排序和几何验证。
+- 基础模型让“无专用训练的强特征”成为可能，也催生了 SelaVPR 这类参数高效适配和 SuperPlace 这类经典聚合复兴路线；工程系统仍需要索引、压缩、重排序和几何验证。
 
 因此，一个现代 VPR 系统通常不是单一算法，而是多阶段组合：
 
