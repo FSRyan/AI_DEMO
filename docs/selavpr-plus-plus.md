@@ -62,6 +62,10 @@ SelaVPR 是作者前序工作，核心思路为：
 - 提出**互最近邻局部特征损失（MNN loss）**
 - 两阶段流程：全局 GeM 描述子召回 + 局部特征直接匹配重排序（无需 RANSAC 几何验证）
 
+![SelaVPR 全局适配结构（论文 Figure 2）](./images/selavpr/fig2-global-adaptation.png)
+
+![SelaVPR 两阶段 VPR 流程（论文 Figure 3）](./images/selavpr/fig3-two-stage-pipeline.png)
+
 SelaVPR 在多个数据集上取得竞争力结果，且检索速度远快于传统"局部匹配 + RANSAC"管线。
 
 ### 2.2 SelaVPR 仍存在的三大瓶颈
@@ -83,6 +87,34 @@ SelaVPR++ 在 SelaVPR 基础上做三方面升级：
 ---
 
 ## 三、方法详解
+
+> 以下结构图摘自论文 PDF（见仓库 `pdf/` 目录），用于辅助理解整体架构。
+
+### 3.0 论文关键结构图
+
+#### SelaVPR（ICLR 2024）
+
+![SelaVPR Figure 2：Global Adaptation——ViT block 内串联/并联 adapter](./images/selavpr/fig2-global-adaptation.png)
+
+*Figure 2：在每个 Transformer block 的 MHA 后插入串联 adapter，在 MLP 旁并联 adapter；MHA/MLP 冻结，adapter 可训练。*
+
+![SelaVPR Figure 3：局部适配与两阶段 VPR 流程](./images/selavpr/fig3-two-stage-pipeline.png)
+
+*Figure 3：全局分支经 GeM 池化做 Top-K 召回；局部分支经上采样卷积得到密集特征，用于互最近邻匹配重排序。*
+
+#### SelaVPR++（T-PAMI 2026）
+
+![SelaVPR++ Fig. 2：Full Tuning / Vanilla adapter / Memory-efficient 并行适配对比](./images/selavprpp/fig2-transfer-learning-comparison.png)
+
+*Fig. 2：(a) 全量微调；(b) SelaVPR 内置 adapter（反向传播仍穿过 backbone）；(c) SelaVPR++ 并行侧路适配（梯度仅在侧路流动）。*
+
+![SelaVPR++ Fig. 3：SelaVPR 全局适配 vs MultiConv 并行适配](./images/selavprpp/fig3-multiconv-adaptation.png)
+
+*Fig. 3：(a) 标准 ViT block；(b) SelaVPR 全局适配；(c) 侧路 MCA 模块逐层精炼 backbone 中间特征。*
+
+![SelaVPR++ Fig. 4：二进制 + 浮点双分支两阶段 VPR 流程](./images/selavprpp/fig4-two-stage-pipeline.png)
+
+*Fig. 4：冻结 foundation model + 两个独立 Side Adapter Network；上分支输出 512-dim 二进制特征做 Hamming 召回，下分支输出高维浮点特征做 L2 重排序。*
 
 ### 3.1 整体架构
 
